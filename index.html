@@ -863,7 +863,12 @@ function renderMap(perPlant, perPlantProductAll){
 function renderKPIs(agg){
   const {perPlant} = agg;
   let totGal=0, totIng=0, totPondPL=0;
-  perPlant.forEach(o=>{totGal+=o.gal; totIng+=o.ing; totPondPL+=o.pondpl;});
+  if(state.focusPlant!==null){
+    const o = perPlant[state.focusPlant];
+    totGal=o.gal; totIng=o.ing; totPondPL=o.pondpl;
+  } else {
+    perPlant.forEach(o=>{totGal+=o.gal; totIng+=o.ing; totPondPL+=o.pondpl;});
+  }
   const priceAvg = totGal>0? totIng/totGal : 0;
   const listAvg = totGal>0? totPondPL/totGal : 0;
   const discPct = listAvg>0 ? (1-priceAvg/listAvg)*100 : 0;
@@ -892,9 +897,10 @@ function renderKPIs(agg){
     </div>`).join('');
 
   document.getElementById('revenueValue').textContent = fmtSoles(totIng);
+  const scopeLabel = state.focusPlant!==null ? PLANTAS[state.focusPlant] : 'producto(s), zona y periodo elegidos';
   document.getElementById('revenueSub').textContent =
     totGal>0
-      ? `Precio de venta ponderado (S/ ${priceAvg.toFixed(3)}/gal) × ${fmtN(totGal,0)} gal — producto(s), zona y periodo elegidos`
+      ? `Precio de venta ponderado (S/ ${priceAvg.toFixed(3)}/gal) × ${fmtN(totGal,0)} gal — ${scopeLabel}`
       : 'Sin ventas para el periodo / selección actual';
 }
 
