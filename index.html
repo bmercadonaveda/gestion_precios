@@ -471,6 +471,11 @@
       <div class="tooltip" id="trendTooltip"></div>
     </div>
     <div class="legend" id="trendLegend"></div>
+    <div class="filter-group" id="trendViewToggle" style="margin-top:10px;">
+      <span class="filter-title">Mostrar</span>
+      <span class="chip view active" data-view="ventas">Ventas (barras)</span>
+      <span class="chip view active" data-view="precios">Precios (líneas)</span>
+    </div>
   </div>
 </div>
 
@@ -673,7 +678,8 @@ function loadDataset(ds){
 
   state = {
     mode:'range', startDay:0, endDay:MAX_DAY, marketZone:'all',
-    products:new Set(PRODUCTOS.map((_,i)=>i)), focusPlant:new Set()
+    products:new Set(PRODUCTOS.map((_,i)=>i)), focusPlant:new Set(),
+    trendView:{ventas:true, precios:true}
   };
 
   initFilterUI();
@@ -917,10 +923,19 @@ function renderTrendChart(perProductPeriod){
   const activeProducts = PRODUCTOS.map((name,i)=>i).filter(i=> state.products.has(i) && perProductPeriod[i].size>0);
   const daily = useDailyGranularity();
   const granLabel = daily? 'diaria':'mensual';
+  const showVentas = state.trendView.ventas;
+  const showPrecios = state.trendView.precios;
+  const plantaLabel = state.focusPlant.size>0
+    ? [...state.focusPlant].sort((a,b)=>a-b).map(i=>PLANTAS[i]).join(', ')
+    : 'promedio de todas las plantas';
 
-  document.getElementById('trendSub').textContent = state.focusPlant.size>0
-    ? `Precio de venta ponderado, S/gal — ${[...state.focusPlant].sort((a,b)=>a-b).map(i=>PLANTAS[i]).join(', ')}, evolución ${granLabel}, una línea por producto`
-    : `Precio de venta ponderado, S/gal — promedio de todas las plantas, evolución ${granLabel}, una línea por producto`;
+  if(showPrecios && showVentas){
+    document.getElementById('trendSub').textContent = `Precio de venta ponderado (líneas, S/gal) y volumen de ventas (barras, MBDC) — ${plantaLabel}, evolución ${granLabel}`;
+  } else if(showPrecios){
+    document.getElementById('trendSub').textContent = `Precio de venta ponderado, S/gal — ${plantaLabel}, evolución ${granLabel}, una línea por producto`;
+  } else {
+    document.getElementById('trendSub').textContent = `Volumen de ventas, MBDC — ${plantaLabel}, evolución ${granLabel}, una barra por producto`;
+  }
 
   if(activeProducts.length===0){
     trendSvg.innerHTML = `<text x="240" y="150" text-anchor="middle" class="axis-label">Sin datos para el periodo / selección actual</text>`;
@@ -966,11 +981,24 @@ function renderTrendChart(perProductPeriod){
   const W=680,H=520, padL=54, padR=54, padT=22, padB=52;
   const plotW=W-padL-padR, plotH=H-padT-padB;
 
+  if(!showVentas && !showPrecios){
+    trendSvg.innerHTML = `<text x="${W/2}" y="${H/2}" text-anchor="middle" class="axis-label">Activa "Ventas" o "Precios" para ver el gráfico</text>`;
+    document.getElementById('trendLegend').innerHTML='';
+    return;
+  }
+
   const allVals = series.flatMap(s=>s.data).filter(v=>v!==null&&v!==undefined);
-  if(allVals.length===0){ trendSvg.innerHTML = `<text x="${W/2}" y="${H/2}" text-anchor="middle" class="axis-label">Sin datos para el periodo seleccionado</text>`; return; }
-  let vMin=Math.min(...allVals), vMax=Math.max(...allVals);
-  if(vMin===vMax){ vMin-=1; vMax+=1; }
-  const pad=(vMax-vMin)*0.12; vMin-=pad; vMax+=pad;
+  if(showPrecios && allVals.length===0){
+    trendSvg.innerHTML = `<text x="${W/2}" y="${H/2}" text-anchor="middle" class="axis-label">Sin datos de precio para el periodo seleccionado</text>`;
+    document.getElementById('trendLegend').innerHTML='';
+    return;
+  }
+  let vMin=0, vMax=1;
+  if(showPrecios){
+    vMin=Math.min(...allVals); vMax=Math.max(...allVals);
+    if(vMin===vMax){ vMin-=1; vMax+=1; }
+    const pad=(vMax-vMin)*0.12; vMin-=pad; vMax+=pad;
+  }
 
   const xAt = (idx)=> padL + (periods.length>1 ? idx/(periods.length-1)*plotW : plotW/2);
   const yAt = (v)=> padT + plotH - (v-vMin)/(vMax-vMin)*plotH;
@@ -978,20 +1006,37 @@ function renderTrendChart(perProductPeriod){
 
   let html='';
   const yTicks=6;
-  for(let t=0;t<=yTicks;t++){
-    const v = vMin + (vMax-vMin)*t/yTicks;
-    const y = yAt(v);
-    html+=`<line class="grid-line" x1="${padL}" y1="${y.toFixed(1)}" x2="${W-padR}" y2="${y.toFixed(1)}"/>`;
-    html+=`<text class="axis-label" x="${padL-8}" y="${(y+3).toFixed(1)}" text-anchor="end">${v.toFixed(1)}</text>`;
+  if(showPrecios){
+    // primary (left) axis — price, S/gal
+    for(let t=0;t<=yTicks;t++){
+      const v = vMin + (vMax-vMin)*t/yTicks;
+      const y = yAt(v);
+      html+=`<line class="grid-line" x1="${padL}" y1="${y.toFixed(1)}" x2="${W-padR}" y2="${y.toFixed(1)}"/>`;
+      html+=`<text class="axis-label" x="${padL-8}" y="${(y+3).toFixed(1)}" text-anchor="end">${v.toFixed(1)}</text>`;
+    }
+  } else if(showVentas){
+    // ventas-only: the left axis becomes the MBDC scale
+    for(let t=0;t<=yTicks;t++){
+      const v = maxMBDC*t/yTicks;
+      const y = yAtBar(v);
+      html+=`<line class="grid-line" x1="${padL}" y1="${y.toFixed(1)}" x2="${W-padR}" y2="${y.toFixed(1)}"/>`;
+      html+=`<text class="axis-label" x="${padL-8}" y="${(y+3).toFixed(1)}" text-anchor="end">${v.toFixed(1)}</text>`;
+    }
   }
-  // secondary (right) axis for MBDC
-  for(let t=0;t<=yTicks;t++){
-    const v = maxMBDC*t/yTicks;
-    const y = yAtBar(v);
-    html+=`<text class="axis-label" x="${W-padR+8}" y="${(y+3).toFixed(1)}" text-anchor="start">${v.toFixed(1)}</text>`;
+  if(showVentas && showPrecios){
+    // secondary (right) axis for MBDC, alongside the price axis
+    for(let t=0;t<=yTicks;t++){
+      const v = maxMBDC*t/yTicks;
+      const y = yAtBar(v);
+      html+=`<text class="axis-label" x="${W-padR+8}" y="${(y+3).toFixed(1)}" text-anchor="start">${v.toFixed(1)}</text>`;
+    }
+    html+=`<text class="axis-label" x="${W-padR+8}" y="${padT-8}" text-anchor="start" style="font-weight:700;">MBDC</text>`;
+    html+=`<text class="axis-label" x="${padL-8}" y="${padT-8}" text-anchor="end" style="font-weight:700;">S/gal</text>`;
+  } else if(showPrecios){
+    html+=`<text class="axis-label" x="${padL-8}" y="${padT-8}" text-anchor="end" style="font-weight:700;">S/gal</text>`;
+  } else if(showVentas){
+    html+=`<text class="axis-label" x="${padL-8}" y="${padT-8}" text-anchor="end" style="font-weight:700;">MBDC</text>`;
   }
-  html+=`<text class="axis-label" x="${W-padR+8}" y="${padT-8}" text-anchor="start" style="font-weight:700;">MBDC</text>`;
-  html+=`<text class="axis-label" x="${padL-8}" y="${padT-8}" text-anchor="end" style="font-weight:700;">S/gal</text>`;
 
   // limit how many x positions get labels/data-labels so it stays readable
   const maxLabeled = 9;
@@ -1008,58 +1053,62 @@ function renderTrendChart(perProductPeriod){
   });
 
   // stacked bars (volume, secondary axis) drawn first, behind the price lines
-  const bw = periods.length>1 ? (plotW/periods.length)*0.62 : plotW*0.3;
-  periods.forEach((pk,idx)=>{
-    let cum=0;
-    const x = xAt(idx)-bw/2;
-    stackedMBDC[idx].forEach((v,si)=>{
-      if(v<=0) return;
-      const yTop = yAtBar(cum+v), yBase = yAtBar(cum);
-      html += `<rect class="bar" data-pk="${pk}" data-name="${series[si].name}" data-v="${v.toFixed(3)}" x="${x.toFixed(1)}" y="${yTop.toFixed(1)}" width="${bw.toFixed(1)}" height="${(yBase-yTop).toFixed(1)}" fill="${series[si].color}" fill-opacity="0.32" style="cursor:pointer;"/>`;
-      cum += v;
+  if(showVentas){
+    const bw = periods.length>1 ? (plotW/periods.length)*0.62 : plotW*0.3;
+    periods.forEach((pk,idx)=>{
+      let cum=0;
+      const x = xAt(idx)-bw/2;
+      stackedMBDC[idx].forEach((v,si)=>{
+        if(v<=0) return;
+        const yTop = yAtBar(cum+v), yBase = yAtBar(cum);
+        html += `<rect class="bar" data-pk="${pk}" data-name="${series[si].name}" data-v="${v.toFixed(3)}" x="${x.toFixed(1)}" y="${yTop.toFixed(1)}" width="${bw.toFixed(1)}" height="${(yBase-yTop).toFixed(1)}" fill="${series[si].color}" fill-opacity="0.32" style="cursor:pointer;"/>`;
+        cum += v;
+      });
     });
-  });
-  // bar total data-labels (1 decimal), only at labeled x-positions, above each stack
-  labeledIdx.forEach(idx=>{
-    const total = periodTotals[idx];
-    if(total<=0) return;
-    const x=xAt(idx), y=yAtBar(total);
-    html += `<rect x="${(x-16).toFixed(1)}" y="${(y-15).toFixed(1)}" width="32" height="13" rx="3" fill="#fff" fill-opacity="0.85"/>`;
-    html += `<text x="${x.toFixed(1)}" y="${(y-5).toFixed(1)}" text-anchor="middle" style="font-size:9.5px; font-weight:700;" fill="#5B6B78">${total.toFixed(1)}</text>`;
-  });
+    // bar total data-labels (1 decimal), only at labeled x-positions, above each stack
+    labeledIdx.forEach(idx=>{
+      const total = periodTotals[idx];
+      if(total<=0) return;
+      const x=xAt(idx), y=yAtBar(total);
+      html += `<rect x="${(x-16).toFixed(1)}" y="${(y-15).toFixed(1)}" width="32" height="13" rx="3" fill="#fff" fill-opacity="0.85"/>`;
+      html += `<text x="${x.toFixed(1)}" y="${(y-5).toFixed(1)}" text-anchor="middle" style="font-size:9.5px; font-weight:700;" fill="#5B6B78">${total.toFixed(1)}</text>`;
+    });
+  }
 
   html+=`<line class="axis-line" x1="${padL}" y1="${padT}" x2="${padL}" y2="${H-padB}"/>`;
   html+=`<line class="axis-line" x1="${padL}" y1="${H-padB}" x2="${W-padR}" y2="${H-padB}"/>`;
   html+=`<line class="axis-line" x1="${W-padR}" y1="${padT}" x2="${W-padR}" y2="${H-padB}"/>`;
 
-  series.forEach(s=>{
-    let path=''; let started=false;
-    s.data.forEach((v,idx)=>{
-      if(v===null||v===undefined) return;
-      const x=xAt(idx), y=yAt(v);
-      path += (started?'L':'M') + x.toFixed(1)+','+y.toFixed(1)+' ';
-      started=true;
-    });
-    html += `<path d="${path}" fill="none" stroke="${s.color}" stroke-width="2.4"/>`;
-    const showPoints = periods.length<=180;
-    if(showPoints){
+  if(showPrecios){
+    series.forEach(s=>{
+      let path=''; let started=false;
       s.data.forEach((v,idx)=>{
         if(v===null||v===undefined) return;
         const x=xAt(idx), y=yAt(v);
-        html += `<circle class="pt" data-name="${s.name}" data-pk="${periods[idx]}" data-v="${v.toFixed(4)}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.4" fill="${s.color}" stroke="#fff" stroke-width="1" style="cursor:pointer;"/>`;
+        path += (started?'L':'M') + x.toFixed(1)+','+y.toFixed(1)+' ';
+        started=true;
       });
-    }
-  });
-  // price data-labels (1 decimal), only at labeled x-positions, staggered per series to avoid overlap
-  series.forEach((s,si)=>{
-    labeledIdx.forEach(idx=>{
-      const v = s.data[idx];
-      if(v===null||v===undefined) return;
-      const x=xAt(idx), y=yAt(v) - 9 - (si%3)*12;
-      html += `<rect x="${(x-15).toFixed(1)}" y="${(y-9).toFixed(1)}" width="30" height="12" rx="3" fill="#fff" fill-opacity="0.85"/>`;
-      html += `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="middle" style="font-size:9px; font-weight:700;" fill="${s.color}">${v.toFixed(1)}</text>`;
+      html += `<path d="${path}" fill="none" stroke="${s.color}" stroke-width="2.4"/>`;
+      const showPoints = periods.length<=180;
+      if(showPoints){
+        s.data.forEach((v,idx)=>{
+          if(v===null||v===undefined) return;
+          const x=xAt(idx), y=yAt(v);
+          html += `<circle class="pt" data-name="${s.name}" data-pk="${periods[idx]}" data-v="${v.toFixed(4)}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.4" fill="${s.color}" stroke="#fff" stroke-width="1" style="cursor:pointer;"/>`;
+        });
+      }
     });
-  });
+    // price data-labels (1 decimal), only at labeled x-positions, staggered per series to avoid overlap
+    series.forEach((s,si)=>{
+      labeledIdx.forEach(idx=>{
+        const v = s.data[idx];
+        if(v===null||v===undefined) return;
+        const x=xAt(idx), y=yAt(v) - 9 - (si%3)*12;
+        html += `<rect x="${(x-15).toFixed(1)}" y="${(y-9).toFixed(1)}" width="30" height="12" rx="3" fill="#fff" fill-opacity="0.85"/>`;
+        html += `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="middle" style="font-size:9px; font-weight:700;" fill="${s.color}">${v.toFixed(1)}</text>`;
+      });
+    });
+  }
 
   trendSvg.innerHTML = html;
   trendSvg.querySelectorAll('.pt').forEach(pt=>{
@@ -1087,9 +1136,14 @@ function renderTrendChart(perProductPeriod){
     bar.addEventListener('mouseleave', ()=> trendTooltip.classList.remove('show'));
   });
 
-  document.getElementById('trendLegend').innerHTML = series.map(s=>
+  let legendHtml = series.map(s=>
     `<div class="legend-item"><span class="legend-line" style="background:${s.color}"></span>${s.name}</div>`
-  ).join('') + `<div class="legend-item"><span class="legend-sq" style="background:#B9C4CC; opacity:.5;"></span>Barras (eje derecho) = volumen en MBDC</div>`;
+  ).join('');
+  if(showVentas){
+    const axisNote = showPrecios ? ' (eje derecho)' : '';
+    legendHtml += `<div class="legend-item"><span class="legend-sq" style="background:#B9C4CC; opacity:.5;"></span>Barras${axisNote} = volumen en MBDC</div>`;
+  }
+  document.getElementById('trendLegend').innerHTML = legendHtml;
 }
 
 /* ==================================================================
@@ -1515,6 +1569,19 @@ function buildPlantSelectOptions(){
 plantSelect.addEventListener('change', ()=>{
   const v = plantSelect.value;
   setFocus(v===''? null : +v);
+});
+
+document.querySelectorAll('#trendViewToggle .chip.view').forEach(chip=>{
+  chip.addEventListener('click', ()=>{
+    const key = chip.dataset.view;
+    const willBeActive = !chip.classList.contains('active');
+    const otherKey = key==='ventas' ? 'precios' : 'ventas';
+    // don't allow turning off both — the last active one stays on
+    if(!willBeActive && !state.trendView[otherKey]) return;
+    state.trendView[key] = willBeActive;
+    chip.classList.toggle('active', willBeActive);
+    renderTrendChart(computeAll().perProductPeriod);
+  });
 });
 
 document.getElementById('resetBtn').addEventListener('click', ()=>{
